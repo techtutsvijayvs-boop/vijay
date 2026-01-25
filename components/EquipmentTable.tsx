@@ -1,19 +1,25 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Plus, Search, Edit2, Trash2, Calendar, FileDown, MoreVertical,
   AlertTriangle, CheckCircle, CheckCircle2, Clock, Building2, Download, FileText, 
   Paperclip, Share2, Copy, Check, ChevronRight, MessageCircle, 
-  CreditCard, Receipt, FolderOpen
+  CreditCard, Receipt, FolderOpen, Upload, FileSpreadsheet, ShieldCheck, Truck, Lock, Unlock, Shield
 } from 'lucide-react';
 import { EquipmentRecord, ComputedFields, ApprovalStatus, Attachment } from '../types';
 import { computeRecordFields, formatCurrency } from '../utils/calculations';
+import { format, isValid } from 'date-fns';
+import AdminInvoiceModal from './AdminInvoiceModal';
 
 interface EquipmentTableProps {
   records: EquipmentRecord[];
   onAdd: () => void;
   onEdit: (record: EquipmentRecord) => void;
   onDelete: (id: string) => void;
+  onQuickUpload: (record: EquipmentRecord) => void;
+  onExcelImport: (file: File) => void;
+  isAdmin: boolean;
+  onUpdateRecord: (record: EquipmentRecord) => void;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -22,12 +28,20 @@ const STATUS_COLORS: Record<string, string> = {
   'RE': 'bg-orange-500 text-white border-orange-600 shadow-orange-100',
   'C': 'bg-gray-500 text-white border-gray-600 shadow-gray-100',
   'R': 'bg-red-600 text-white border-red-700 shadow-red-100',
-  'N/A': 'bg-gray-100 text-gray-400 border-gray-200'
+  'N/A': 'bg-gray-100 text-gray-400 border-gray-200 dark:bg-gray-800 dark:text-gray-500 dark:border-gray-700'
 };
 
-const EquipmentTable: React.FC<EquipmentTableProps> = ({ records, onAdd, onEdit, onDelete }) => {
+const safeFormat = (dateStr: string | null | undefined) => {
+  if (!dateStr) return 'N/A';
+  const d = new Date(dateStr);
+  return isValid(d) ? d.toLocaleDateString() : 'Invalid Date';
+};
+
+const EquipmentTable: React.FC<EquipmentTableProps> = ({ records, onAdd, onEdit, onDelete, onQuickUpload, onExcelImport, isAdmin, onUpdateRecord }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [copied, setCopied] = useState(false);
+  const [adminModalRecord, setAdminModalRecord] = useState<EquipmentRecord | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredRecords = records.filter(r => 
     r.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -36,8 +50,8 @@ const EquipmentTable: React.FC<EquipmentTableProps> = ({ records, onAdd, onEdit,
     r.internalCompany.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const getExportData = () => {
-    return records.map(record => {
+  const exportToCSV = () => {
+    const data = records.map(record => {
       const comp = computeRecordFields(record);
       return {
         slNo: record.slNo,
@@ -45,6 +59,7 @@ const EquipmentTable: React.FC<EquipmentTableProps> = ({ records, onAdd, onEdit,
         serialNumber: record.serialNumber,
         unit: record.unit,
         qty: record.qty,
+        ownership: record.ownershipType,
         internalCompany: record.internalCompany,
         rentalCompany: record.rentalCompany,
         rateType: record.rateType,
@@ -58,25 +73,17 @@ const EquipmentTable: React.FC<EquipmentTableProps> = ({ records, onAdd, onEdit,
         status: comp.pendingClaimStatus,
         approval: record.approvalStatus || 'N/A',
         paymentDone: record.isPaymentDone ? "YES" : "NO",
-        paymentDate: record.paymentDate || "",
         pending: comp.pendingAmount.toFixed(2),
         calibDue: record.calibrationDueDate,
-        calibRem: comp.calibrationRemainingDays,
-        reminder: comp.reminderStatus,
-        remarks: record.remarks || "",
-        filesCount: (record.attachments || []).length
+        remarks: record.remarks || ""
       };
     });
-  };
 
-  const exportToCSV = () => {
-    const data = getExportData();
     const headers = [
-      "SL NO", "DESCRIPTION", "SERIAL NUMBER", "UNIT", "QTY", "Internal Company",
+      "SL NO", "DESCRIPTION", "SERIAL NUMBER", "UNIT", "QTY", "Ownership", "Internal Company",
       "Rental Company Name", "Kit Rate Type", "Rate Value", "Kit Received Date",
       "Kit Returned Date", "No. of Days Using", "Rental Cost (SAR)", "Invoice Number",
-      "Claim Month", "Claim Status", "Approval Status", "Payment Done", "Payment Date", "Pending Amount", "Calibration Due Date",
-      "Calibration Remaining Days", "Reminder Status", "Remarks", "Total Files"
+      "Claim Month", "Claim Status", "Approval Status", "Payment Done", "Pending Amount", "Calibration Due Date", "Remarks"
     ];
 
     const csvContent = [
@@ -93,8 +100,17 @@ const EquipmentTable: React.FC<EquipmentTableProps> = ({ records, onAdd, onEdit,
   };
 
   const copyForGoogleSheets = () => {
-    const data = getExportData();
-    const tsvContent = data.map(d => Object.values(d).join("\t")).join("\n");
+    const tsvContent = records.map(record => {
+      const comp = computeRecordFields(record);
+      return [
+        record.slNo, record.description, record.serialNumber, record.unit, record.qty, 
+        record.internalCompany, record.rentalCompany, record.rateType, record.rateValue,
+        record.kitReceivedDate, record.kitReturnedDate || "ACTIVE", comp.daysUsing,
+        comp.rentalCost.toFixed(2), record.invoiceNumber, record.claimMonth,
+        comp.pendingClaimStatus, record.approvalStatus || 'N/A', record.isPaymentDone ? "YES" : "NO",
+        comp.pendingAmount.toFixed(2), record.calibrationDueDate, record.remarks || ""
+      ].join("\t");
+    }).join("\n");
     
     navigator.clipboard.writeText(tsvContent).then(() => {
       setCopied(true);
@@ -110,185 +126,283 @@ const EquipmentTable: React.FC<EquipmentTableProps> = ({ records, onAdd, onEdit,
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-      <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white sticky top-0 z-10">
+    <div className="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 overflow-hidden">
+      {/* Search Header */}
+      <div className="p-4 border-b border-gray-100 dark:border-gray-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-gray-900 sticky top-0 z-10">
         <div className="relative flex-1 max-md:max-w-none max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
           <input
             type="text"
-            placeholder="Search register..."
-            className="w-full pl-10 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all text-sm"
+            placeholder="Quick search register..."
+            className="w-full pl-10 pr-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-green-600 transition-all text-sm text-slate-900 dark:text-white"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
         
-        <div className="flex items-center gap-2">
-          <div className="flex items-center bg-green-50 rounded-lg p-1 border border-green-100">
+        <div className="flex items-center gap-3">
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            className="hidden" 
+            accept=".xlsx,.xls,.csv" 
+            onChange={(e) => e.target.files?.[0] && onExcelImport(e.target.files[0])} 
+          />
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-gray-800 text-slate-700 dark:text-gray-300 rounded-xl font-bold text-xs hover:bg-slate-200 dark:hover:bg-gray-700 transition-all border border-slate-200 dark:border-gray-700"
+          >
+            <FileSpreadsheet size={16} />
+            Import Excel
+          </button>
+
+          <div className="flex items-center bg-green-50 dark:bg-green-900/20 rounded-xl p-1 border border-green-100 dark:border-green-800">
             <button
               onClick={copyForGoogleSheets}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md font-bold text-xs transition-all ${
-                copied ? 'bg-green-600 text-white' : 'text-green-700 hover:bg-green-100'
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-lg font-bold text-xs transition-all ${
+                copied ? 'bg-green-600 text-white shadow-lg shadow-green-200 dark:shadow-none' : 'text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40'
               }`}
             >
               {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? 'Copied!' : 'Copy for Sheet'}
+              {copied ? 'Copied!' : 'Sheet Sync'}
             </button>
-            <div className="w-[1px] h-4 bg-green-200 mx-1"></div>
-            <button onClick={exportToCSV} className="p-1.5 text-green-700 hover:bg-green-100 rounded-md transition-colors" title="Export CSV">
-              <Download size={14} />
+            <div className="w-[1px] h-4 bg-green-200 dark:bg-green-800 mx-2"></div>
+            <button onClick={exportToCSV} className="p-1.5 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900/40 rounded-lg transition-colors" title="Export Full Register as CSV">
+              <Download size={18} />
             </button>
           </div>
-
-          <button
-            onClick={onAdd}
-            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold text-xs transition-colors shadow-sm"
-          >
-            <Plus size={16} />
-            New Entry
-          </button>
         </div>
       </div>
 
       <div className="overflow-x-auto max-h-[calc(100vh-280px)] scrollbar-thin">
-        <table className="w-full text-left text-sm min-w-[2200px]">
-          <thead className="bg-gray-50 text-gray-600 uppercase text-[10px] font-black tracking-widest sticky top-0 z-10 border-b border-gray-100">
+        <table className="w-full text-left text-sm min-w-[2400px]">
+          <thead className="bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400 uppercase text-[10px] font-black tracking-widest sticky top-0 z-10 border-b border-gray-100 dark:border-gray-700">
             <tr>
-              <th className="py-3 px-4">SL</th>
-              <th className="py-3 px-4">Equipment Details</th>
-              <th className="py-3 px-4">Rental Vendor</th>
-              <th className="py-3 px-4 text-center">Rental Period</th>
-              <th className="py-3 px-4">Total Cost</th>
-              <th className="py-3 px-4">Workflow Status</th>
-              <th className="py-3 px-4">Approval</th>
-              <th className="py-3 px-4">Files</th>
-              <th className="py-3 px-4 text-center">Payment Status</th>
-              <th className="py-3 px-4">Calibration</th>
-              <th className="py-3 px-4 sticky right-0 bg-gray-50">Actions</th>
+              <th className="py-4 px-4">SL</th>
+              <th className="py-4 px-4">Equipment Details</th>
+              <th className="py-4 px-4">Rental Vendor</th>
+              <th className="py-4 px-4 text-center">Rental Period</th>
+              <th className="py-4 px-4">Total Cost</th>
+              <th className="py-4 px-4">Claim Progress</th>
+              <th className="py-4 px-4">
+                 <div className="flex items-center gap-2">
+                    Approval Status
+                    {isAdmin ? <Shield size={12} className="text-emerald-500" /> : <Lock size={12} className="text-slate-400" />}
+                 </div>
+              </th>
+              <th className="py-4 px-4">Files & Docs</th>
+              <th className="py-4 px-4 text-center">
+                 <div className="flex items-center justify-center gap-2">
+                    Payment Status
+                    {isAdmin ? <Shield size={12} className="text-emerald-500" /> : <Lock size={12} className="text-slate-400" />}
+                 </div>
+              </th>
+              <th className="py-4 px-4">Calibration</th>
+              <th className="py-4 px-4 sticky right-0 bg-gray-50 dark:bg-gray-800">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-50">
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
             {filteredRecords.length === 0 ? (
               <tr>
-                <td colSpan={11} className="py-12 text-center text-gray-400 bg-white font-bold">
-                  No records found matching your search criteria.
+                <td colSpan={11} className="py-20 text-center text-gray-400 dark:text-gray-600 bg-white dark:bg-gray-900 font-bold">
+                   No equipment found matching your search.
                 </td>
               </tr>
             ) : (
               filteredRecords.map(record => {
                 const computed = computeRecordFields(record);
+                const hasAdminComments = record.adminComments && record.adminComments.length > 0;
+                
                 return (
-                  <tr key={record.id} className="hover:bg-blue-50/20 transition-colors group">
-                    <td className="py-4 px-4 font-mono text-gray-300">#{record.slNo}</td>
+                  <tr key={record.id} className="hover:bg-blue-50/10 dark:hover:bg-green-900/10 transition-colors group bg-white dark:bg-gray-900">
+                    <td className="py-4 px-4 font-mono text-gray-300 dark:text-gray-600">#{record.slNo}</td>
                     <td className="py-4 px-4">
-                      <div className="font-bold text-gray-900">{record.description}</div>
-                      <div className="text-[10px] text-gray-400 font-mono">S/N: {record.serialNumber}</div>
-                      <div className="text-[10px] font-bold text-blue-600 mt-0.5">{record.internalCompany}</div>
+                      <div className="flex items-start gap-3">
+                        <div className={`mt-1 p-1.5 rounded-lg border ${
+                          record.ownershipType === 'Own' 
+                            ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400 dark:border-emerald-800' 
+                            : 'bg-blue-50 text-blue-600 border-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800'
+                        }`} title={record.ownershipType}>
+                          {record.ownershipType === 'Own' ? <ShieldCheck size={14} /> : <Truck size={14} />}
+                        </div>
+                        <div>
+                          <div className="font-black text-gray-900 dark:text-white leading-tight flex items-center gap-2">
+                            {record.description}
+                            <span className={`text-[8px] px-1.5 py-0.5 rounded font-black ${
+                              record.ownershipType === 'Own' ? 'bg-emerald-600 text-white' : 'bg-blue-600 dark:bg-blue-500 text-white'
+                            }`}>
+                              {record.ownershipType.toUpperCase()}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-gray-400 dark:text-gray-500 font-mono mt-0.5">SN: {record.serialNumber}</div>
+                          <div className="text-[10px] font-black text-blue-600 dark:text-blue-400 mt-1 uppercase tracking-tighter">{record.internalCompany}</div>
+                        </div>
+                      </div>
                     </td>
                     <td className="py-4 px-4">
-                      <div className="text-xs font-semibold text-gray-700">{record.rentalCompany}</div>
-                      <div className="text-[10px] text-gray-500">{record.rateType} @ {formatCurrency(record.rateValue)}</div>
+                      <div className="text-xs font-black text-gray-700 dark:text-gray-300">{record.rentalCompany}</div>
+                      <div className="text-[10px] text-gray-500 dark:text-gray-500 font-medium">{record.rateType} @ {formatCurrency(record.rateValue)}</div>
                     </td>
                     <td className="py-4 px-4">
                       <div className="flex items-center justify-center gap-3">
                         <div className="text-center">
-                          <div className="text-[9px] text-gray-400 uppercase font-bold">In</div>
-                          <div className="text-xs font-medium">{new Date(record.kitReceivedDate).toLocaleDateString()}</div>
+                          <div className="text-[9px] text-gray-400 uppercase font-black">Received</div>
+                          <div className="text-xs font-bold text-gray-600 dark:text-gray-300">{safeFormat(record.kitReceivedDate)}</div>
                         </div>
-                        <ChevronRight size={14} className="text-gray-200" />
+                        <ChevronRight size={14} className="text-gray-200 dark:text-gray-700" />
                         <div className="text-center">
-                          <div className="text-[9px] text-gray-400 uppercase font-bold">Out</div>
-                          <div className="text-xs font-medium">
-                            {record.kitReturnedDate ? new Date(record.kitReturnedDate).toLocaleDateString() : 'ACTIVE'}
+                          <div className="text-[9px] text-gray-400 uppercase font-black">Returned</div>
+                          <div className="text-xs font-bold text-gray-600 dark:text-gray-300">
+                            {record.kitReturnedDate ? safeFormat(record.kitReturnedDate) : <span className="text-blue-500 dark:text-green-400">ACTIVE</span>}
                           </div>
                         </div>
                       </div>
                     </td>
                     <td className="py-4 px-4">
-                      <div className="text-[10px] text-gray-400 font-bold">{computed.daysUsing} DAYS</div>
-                      <div className="text-sm font-black text-blue-900">{formatCurrency(computed.rentalCost)}</div>
+                      <div className="text-[10px] text-gray-400 font-black">{computed.daysUsing} DAYS</div>
+                      <div className="text-sm font-black text-slate-900 dark:text-white tracking-tight">{formatCurrency(computed.rentalCost)}</div>
                       {computed.pendingAmount > 0 && (
-                        <div className="text-[9px] text-red-500 font-bold italic">PENDING: {formatCurrency(computed.pendingAmount)}</div>
+                        <div className="text-[9px] text-red-500 font-black italic mt-0.5">UNPAID: {formatCurrency(computed.pendingAmount)}</div>
                       )}
                     </td>
                     <td className="py-4 px-4">
-                      <div className="flex flex-col gap-1">
+                      <div className="flex flex-col gap-1.5">
                         <span className={`px-2 py-0.5 rounded text-[9px] font-black w-fit border ${
-                          computed.pendingClaimStatus === 'PAID' ? 'bg-green-100 text-green-700 border-green-200' :
-                          computed.pendingClaimStatus === 'SUBMITTED' ? 'bg-blue-100 text-blue-700 border-blue-200' : 
-                          'bg-red-50 text-red-700 border-red-100'
+                          computed.pendingClaimStatus === 'PAID' ? 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' :
+                          computed.pendingClaimStatus === 'SUBMITTED' ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' : 
+                          'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800'
                         }`}>
                           {computed.pendingClaimStatus}
                         </span>
-                        {record.invoiceNumber && <span className="text-[10px] text-gray-500 font-mono">#{record.invoiceNumber}</span>}
-                        <div className="text-[9px] text-gray-400 font-bold">{record.claimMonth}</div>
+                        {record.invoiceNumber && <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono font-bold tracking-tighter">INV: {record.invoiceNumber}</span>}
+                        <div className="text-[9px] text-gray-400 font-black uppercase">{record.claimMonth}</div>
                       </div>
                     </td>
+                    
+                    {/* Approval Status - Strict Role Separation */}
                     <td className="py-4 px-4">
                       <div className="flex items-center gap-2">
-                         <span className={`w-10 h-6 flex items-center justify-center rounded text-[10px] font-black border shadow-sm ${STATUS_COLORS[record.approvalStatus || 'N/A']}`}>
-                          {record.approvalStatus || 'N/A'}
-                        </span>
+                        {isAdmin ? (
+                          // ADMIN VIEW: Clickable Button
+                           <button 
+                             onClick={() => setAdminModalRecord(record)}
+                             className={`w-12 h-7 flex items-center justify-center rounded-lg text-[10px] font-black border shadow-sm transition-transform hover:scale-105 ${STATUS_COLORS[record.approvalStatus || 'N/A']}`}
+                           >
+                            {record.approvalStatus || 'N/A'}
+                          </button>
+                        ) : (
+                          // USER VIEW: Read-Only Badge + Lock Icon
+                          <div className={`w-12 h-7 flex items-center justify-center rounded-lg text-[10px] font-black border opacity-70 cursor-not-allowed ${STATUS_COLORS[record.approvalStatus || 'N/A']}`}>
+                             {record.approvalStatus || 'N/A'}
+                          </div>
+                        )}
+                        
+                        {hasAdminComments && (
+                          <div className="text-[8px] flex items-center gap-1 text-slate-400 bg-slate-50 dark:bg-gray-800 px-1.5 py-0.5 rounded border border-slate-200 dark:border-gray-700" title="Admin Comments Available">
+                             <MessageCircle size={10} />
+                             {record.adminComments?.length}
+                          </div>
+                        )}
                       </div>
                     </td>
+
                     <td className="py-4 px-4">
-                      <div className="flex flex-wrap gap-1 max-w-[120px]">
+                      <div className="flex flex-wrap gap-1.5 items-center">
                         {(record.attachments || []).length > 0 ? (
                           record.attachments.map(att => (
                             <button 
                               key={att.id}
                               onClick={() => downloadFile(att.data, att.name)}
-                              className={`p-1.5 rounded-lg border transition-all hover:scale-110 ${
-                                att.category === 'Invoice' ? 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-600 hover:text-white' :
-                                att.category === 'Receipt' ? 'bg-green-50 text-green-600 border-green-200 hover:bg-green-600 hover:text-white' :
-                                'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-600 hover:text-white'
+                              className={`p-2 rounded-lg border shadow-sm transition-all hover:scale-110 ${
+                                att.category === 'Invoice' ? 'bg-blue-50 text-blue-600 border-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800' :
+                                att.category === 'Receipt' ? 'bg-green-50 text-green-600 border-green-100 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800' :
+                                'bg-gray-50 text-gray-500 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700'
                               }`}
-                              title={`${att.category}: ${att.name}`}
+                              title={`Download ${att.category}: ${att.name}`}
                             >
-                              {att.category === 'Invoice' ? <FileText size={14} /> : 
-                               att.category === 'Receipt' ? <Receipt size={14} /> : <Paperclip size={14} />}
+                              {att.category === 'Invoice' ? <FileText size={16} /> : 
+                               att.category === 'Receipt' ? <Receipt size={16} /> : <Paperclip size={16} />}
                             </button>
                           ))
                         ) : (
-                          <span className="text-[9px] text-gray-300 font-bold uppercase italic tracking-tighter">No Files</span>
+                          <span className="text-[10px] text-gray-300 dark:text-gray-600 font-bold uppercase italic tracking-tighter">No Docs</span>
                         )}
+                        {/* Users can still upload, but cannot approve */}
+                        <button 
+                          onClick={() => onQuickUpload(record)}
+                          className="p-2 rounded-lg border border-dashed border-blue-200 dark:border-green-700 text-blue-400 dark:text-green-500 hover:bg-blue-50 dark:hover:bg-green-900/20 hover:text-blue-600 dark:hover:text-green-400 hover:border-blue-400 dark:hover:border-green-500 transition-all flex items-center gap-1"
+                          title="Upload new file to this entry"
+                        >
+                          <Upload size={14} />
+                          <span className="text-[9px] font-black uppercase">ADD</span>
+                        </button>
                       </div>
                     </td>
+
+                    {/* Payment Status - Strict Role Separation */}
                     <td className="py-4 px-4">
                       <div className="flex items-center justify-center">
-                        {record.isPaymentDone ? (
-                          <div className="flex flex-col items-center">
-                            <div className="p-1.5 bg-green-50 text-green-600 rounded-full border border-green-100 mb-1">
-                              <CheckCircle2 size={16} />
-                            </div>
-                            <span className="text-[9px] font-black text-green-700">PAID</span>
-                          </div>
+                        {isAdmin ? (
+                          // ADMIN VIEW: Clickable to Open Modal
+                          <button 
+                             onClick={() => setAdminModalRecord(record)}
+                             className="flex flex-col items-center hover:opacity-80 transition-opacity"
+                          >
+                            {record.isPaymentDone ? (
+                              <>
+                                <div className="p-2 bg-green-50 text-green-600 border border-green-100 rounded-full mb-1 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800">
+                                  <CheckCircle2 size={18} />
+                                </div>
+                                <span className="text-[9px] font-black text-green-700 dark:text-green-400">COMPLETED</span>
+                              </>
+                            ) : (
+                              <>
+                                <div className="p-2 bg-gray-50 text-gray-300 border border-gray-100 rounded-full mb-1 dark:bg-gray-800 dark:text-gray-600 dark:border-gray-700">
+                                  <Clock size={18} />
+                                </div>
+                                <span className="text-[9px] font-bold text-gray-400 dark:text-gray-600">PENDING</span>
+                              </>
+                            )}
+                          </button>
                         ) : (
-                          <div className="flex flex-col items-center">
-                            <div className="p-1.5 bg-gray-50 text-gray-300 rounded-full border border-gray-100 mb-1">
-                              <Clock size={16} />
-                            </div>
-                            <span className="text-[9px] font-bold text-gray-400">PENDING</span>
+                          // USER VIEW: Static Status
+                           <div className="flex flex-col items-center opacity-80 cursor-default">
+                            {record.isPaymentDone ? (
+                              <>
+                                <div className="p-2 bg-green-50 text-green-600 border border-green-100 rounded-full mb-1 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800">
+                                  <CheckCircle2 size={18} />
+                                </div>
+                                <span className="text-[9px] font-black text-green-700 dark:text-green-400">PAID</span>
+                              </>
+                            ) : (
+                              <>
+                                <div className="p-2 bg-gray-50 text-gray-300 border border-gray-100 rounded-full mb-1 dark:bg-gray-800 dark:text-gray-600 dark:border-gray-700">
+                                  <Lock size={18} />
+                                </div>
+                                <span className="text-[9px] font-bold text-gray-400 dark:text-gray-600">LOCKED</span>
+                              </>
+                            )}
                           </div>
                         )}
                       </div>
                     </td>
+
                     <td className="py-4 px-4">
                       <div className="flex flex-col gap-1">
-                        <div className={`text-[10px] font-black ${
-                          computed.reminderStatus.includes('OK') ? 'text-green-600' : 
-                          computed.reminderStatus.includes('SOON') ? 'text-yellow-600' : 
-                          'text-red-600'
+                        <div className={`text-[10px] font-black uppercase tracking-tighter ${
+                          computed.reminderStatus.includes('OK') ? 'text-green-600 dark:text-green-400' : 
+                          computed.reminderStatus.includes('SOON') ? 'text-yellow-600 dark:text-yellow-400' : 
+                          'text-red-600 dark:text-red-400'
                         }`}>
                           {computed.reminderStatus}
                         </div>
-                        <div className="text-[10px] text-gray-400">Due: {new Date(record.calibrationDueDate).toLocaleDateString()}</div>
+                        <div className="text-[10px] text-gray-400 font-bold">Due: {safeFormat(record.calibrationDueDate)}</div>
                       </div>
                     </td>
-                    <td className="py-4 px-4 sticky right-0 bg-white group-hover:bg-blue-50/20 transition-colors border-l border-gray-50">
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => onEdit(record)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-100 rounded-md transition-colors"><Edit2 size={14} /></button>
-                        <button onClick={() => onDelete(record.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-100 rounded-md transition-colors"><Trash2 size={14} /></button>
+                    <td className="py-4 px-4 sticky right-0 bg-white dark:bg-gray-900 group-hover:bg-blue-50/10 dark:group-hover:bg-green-900/10 transition-colors border-l border-gray-100 dark:border-gray-800">
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => onEdit(record)} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-100 dark:hover:text-green-400 dark:hover:bg-green-900/40 rounded-xl transition-all" title="Edit Entry"><Edit2 size={16} /></button>
+                        <button onClick={() => onDelete(record.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-100 dark:hover:bg-red-900/20 rounded-xl transition-all" title="Delete Entry"><Trash2 size={16} /></button>
                       </div>
                     </td>
                   </tr>
@@ -300,10 +414,21 @@ const EquipmentTable: React.FC<EquipmentTableProps> = ({ records, onAdd, onEdit,
       </div>
       
       {copied && (
-        <div className="fixed bottom-8 right-8 bg-gray-900 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-slideUp z-[100] border border-gray-700">
-          <div className="bg-green-500 p-1 rounded-full"><Check size={16} /></div>
-          <span className="text-sm font-bold">Register copied for Google Sheets!</span>
+        <div className="fixed bottom-8 right-8 bg-slate-900 dark:bg-green-900 text-white px-8 py-4 rounded-2xl shadow-2xl flex items-center gap-4 animate-slideUp z-[100] border border-slate-700 dark:border-green-700">
+          <div className="bg-green-500 p-1.5 rounded-full"><Check size={20} /></div>
+          <div>
+            <p className="text-sm font-black">Copied for Google Sheets!</p>
+            <p className="text-[10px] text-slate-400 dark:text-green-300 font-bold uppercase tracking-widest">Pasting ready for SL NO mapping</p>
+          </div>
         </div>
+      )}
+
+      {adminModalRecord && (
+        <AdminInvoiceModal 
+           record={adminModalRecord}
+           onClose={() => setAdminModalRecord(null)}
+           onSave={(updated) => onUpdateRecord(updated)}
+        />
       )}
     </div>
   );

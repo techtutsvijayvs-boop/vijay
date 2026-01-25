@@ -1,12 +1,30 @@
 
-import { differenceInDays, parseISO, startOfDay, format } from 'date-fns';
+import { differenceInDays, format } from 'date-fns';
 import { EquipmentRecord, ComputedFields, CalibrationStatus } from '../types';
 
 export const computeRecordFields = (record: EquipmentRecord): ComputedFields => {
-  const today = startOfDay(new Date());
-  const received = parseISO(record.kitReceivedDate);
-  const returned = record.kitReturnedDate ? parseISO(record.kitReturnedDate) : null;
-  const calibDue = parseISO(record.calibrationDueDate);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  const received = record.kitReceivedDate ? new Date(record.kitReceivedDate) : new Date();
+  const returned = record.kitReturnedDate ? new Date(record.kitReturnedDate) : null;
+  const calibDue = record.calibrationDueDate ? new Date(record.calibrationDueDate) : new Date();
+
+  // Validate dates - if invalid, fallback to safe calculations
+  const isReceivedValid = !isNaN(received.getTime());
+  const isCalibValid = !isNaN(calibDue.getTime());
+  const isReturnedValid = returned ? !isNaN(returned.getTime()) : true;
+
+  if (!isReceivedValid || !isCalibValid || !isReturnedValid) {
+    return {
+      daysUsing: 0,
+      rentalCost: 0,
+      pendingClaimStatus: 'PENDING',
+      pendingAmount: 0,
+      calibrationRemainingDays: 0,
+      reminderStatus: '✅ OK'
+    };
+  }
 
   // 1. No. of Days Using
   const daysUsing = differenceInDays(returned || today, received);
@@ -25,12 +43,11 @@ export const computeRecordFields = (record: EquipmentRecord): ComputedFields => 
   let pendingClaimStatus: 'PENDING' | 'SUBMITTED' | 'PAID' = 'PENDING';
   if (record.isPaymentDone) {
     pendingClaimStatus = 'PAID';
-  } else if (record.invoiceNumber.trim() !== '') {
+  } else if (record.invoiceNumber?.trim()) {
     pendingClaimStatus = 'SUBMITTED';
   }
 
   // 4. Pending Amount
-  // Amount is pending unless payment is actually confirmed done
   const pendingAmount = record.isPaymentDone ? 0 : rentalCost;
 
   // 5. Calibration Remaining Days
@@ -57,13 +74,15 @@ export const computeRecordFields = (record: EquipmentRecord): ComputedFields => 
 };
 
 export const formatCurrency = (amount: number) => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'SAR',
+  return `⃁ ${new Intl.NumberFormat('en-US', {
     minimumFractionDigits: 2,
-  }).format(amount);
+    maximumFractionDigits: 2,
+  }).format(amount)}`;
 };
 
 export const getMonthYear = (dateStr: string) => {
-  return format(parseISO(dateStr), 'MMMM yyyy');
+  if (!dateStr) return 'Unknown Date';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return 'Invalid Date';
+  return format(d, 'MMMM yyyy');
 };

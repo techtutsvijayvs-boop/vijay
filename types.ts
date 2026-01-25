@@ -1,6 +1,8 @@
 
 export type RateType = 'Daily' | 'Weekly' | 'Monthly';
 
+export type OwnershipType = 'Rental' | 'Own';
+
 export type CalibrationStatus = '✅ OK' | '🔔 DUE SOON' | '⚠️ URGENT' | '❌ EXPIRED';
 
 export type ApprovalStatus = 'A' | 'AWC' | 'RE' | 'C' | 'R' | 'N/A';
@@ -14,6 +16,13 @@ export interface Attachment {
   category: 'Invoice' | 'Receipt' | 'Manual' | 'Certificate' | 'Other';
 }
 
+export interface AdminComment {
+  id: string;
+  text: string;
+  author: string;
+  timestamp: string;
+}
+
 export interface EquipmentRecord {
   id: string;
   slNo: number;
@@ -23,6 +32,7 @@ export interface EquipmentRecord {
   qty: number;
   internalCompany: string;
   rentalCompany: string;
+  ownershipType: OwnershipType;
   rateType: RateType;
   rateValue: number;
   kitReceivedDate: string;
@@ -31,10 +41,24 @@ export interface EquipmentRecord {
   claimMonth: string;
   remarks: string;
   calibrationDueDate: string;
+  
+  // Workflow Fields
   approvalStatus?: ApprovalStatus;
+  workflowStage?: 'Submitted' | 'Under Review' | 'Approved' | 'Rejected' | 'Paid';
+  adminComments?: AdminComment[];
+  
   isPaymentDone?: boolean;
   paymentDate?: string;
   attachments: Attachment[];
+}
+
+export interface ContactEntry {
+  id: string;
+  name: string;
+  contactNumber: string;
+  email: string;
+  companyName: string;
+  location: string;
 }
 
 export interface ComputedFields {
